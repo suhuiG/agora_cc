@@ -1,0 +1,91 @@
+import json, os, sys
+sys.path.insert(0, os.path.dirname(__file__))
+
+
+class FakeLambda:
+    def __init__(self, payload): self._payload = payload; self.calls = []
+    def invoke(self, **kw):
+        self.calls.append(kw)
+        import io
+        return {"Payload": io.BytesIO(json.dumps(self._payload).encode())}
+
+
+class FakeEcs:
+    def __init__(self): self.calls = []
+    def run_task(self, **kw):
+        self.calls.append(kw)
+        return {"tasks": [{"taskArn": "arn:task/1"}], "failures": []}
+    def describe_tasks(self, **kw):
+        return {"tasks": [{"lastStatus": "STOPPED"}]}
+
+
+class FakeS3Result:
+    def __init__(self, body): self._body = body
+    def get_object(self, **kw):
+        import io
+        return {"Body": io.BytesIO(json.dumps(self._body).encode())}
+
+
+def _event(**over):
+    e = {"tool_id": "gitleaks", "area": "secret", "compute": "lambda",
+         "image_ref": "uri/gitleaks", "scan_id": "s1", "bucket": "b",
+         "input_prefix": "input/s1/", "output_prefix": "output/s1/"}
+    e.update(over)
+    return e
+
+
+def test_no_image_ref_returns_not_run():
+    import dispatch_handler as h
+    out = h.handler(_event(tool_id="snyk-agent-scan", area="sbom_cve", image_ref="", compute="fargate"), None)
+    assert out["tool_id"] == "snyk-agent-scan"
+    assert out["scanned_areas"] == []          # area 미포함 → gate가 not_run
+    assert out["risk"] == "none" and out["findings"] == []
+
+
+def test_lambda_compute_invokes_tool_function(monkeypatch):
+    import dispatch_handler as h
+    monkeypatch.setenv("AGORA_STAGE", "dev")
+    fake = FakeLambda({"scan_id": "s1", "area": "secret", "risk": "high",
+                       "findings": [{"code": "SECRET_X", "severity": "high"}], "scanned_areas": ["secret"]})
+    out = h.handler(_event(), None, clients={"lambda": fake})
+    assert fake.calls[0]["FunctionName"] == "agora-tool-gitleaks-dev"
+    assert out["risk"] == "high" and out["scanned_areas"] == ["secret"]
+
+
+def test_dispatch_passes_model_alias_to_lambda(monkeypatch):
+    import dispatch_handler as h
+    monkeypatch.setenv("AGORA_STAGE", "dev")
+    fake = FakeLambda({"risk": "none", "findings": [], "scanned_areas": ["agent_intent"]})
+    h.handler(_event(tool_id="llm-judge", area="agent_intent", image_ref="uri/llm-judge",
+                     model_alias="sonnet-5"), None, clients={"lambda": fake})
+    assert json.loads(fake.calls[0]["Payload"])["model_alias"] == "sonnet-5"
+
+
+def test_dispatch_omits_model_alias_when_absent(monkeypatch):
+    import dispatch_handler as h
+    monkeypatch.setenv("AGORA_STAGE", "dev")
+    fake = FakeLambda({"risk": "none", "findings": [], "scanned_areas": ["secret"]})
+    h.handler(_event(), None, clients={"lambda": fake})
+    assert "model_alias" not in json.loads(fake.calls[0]["Payload"])
+
+
+def test_fargate_compute_runs_task_and_reads_s3(monkeypatch):
+    import dispatch_handler as h
+    monkeypatch.setenv("AGORA_STAGE", "dev")
+    monkeypatch.setenv("SCAN_CLUSTER", "c"); monkeypatch.setenv("SCAN_SUBNETS", "sub1")
+    monkeypatch.setenv("SCAN_SG", "sg1")
+    s3 = FakeS3Result({"risk": "none", "findings": [], "scanned_areas": ["sast"]})
+    out = h.handler(_event(tool_id="semgrep", area="sast", compute="fargate", image_ref="uri/semgrep"),
+                    None, clients={"ecs": FakeEcs(), "s3": s3}, sleep=lambda *_: None)
+    assert out["scanned_areas"] == ["sast"]
+
+
+def test_tool_error_fail_closed(monkeypatch):
+    import dispatch_handler as h
+    monkeypatch.setenv("AGORA_STAGE", "dev")
+    class Boom:
+        def invoke(self, **kw): raise RuntimeError("lambda down")
+    out = h.handler(_event(), None, clients={"lambda": Boom()})
+    assert out["risk"] == "high"
+    assert any(f.get("code") == "SCANNER_ERROR" for f in out["findings"])
+    assert out["tool_id"] == "gitleaks"

@@ -1,0 +1,17 @@
+# App Runner 컨테이너 빌드 컨텍스트에서 제외 — 시크릿/로컬상태/빌드산출은 이미지에 넣지 않아요.
+.venv
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.ruff_cache
+.mypy_cache
+# 로컬 설정(실 AWS 좌표)은 이미지에 굽지 않고 App Runner env로 주입해요.
+.env
+.env.*
+build
+dist
+*.egg-info
+tests
+*.log
+.DS_Store

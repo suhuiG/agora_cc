@@ -1,0 +1,13 @@
+# App Runner 컨테이너 빌드 컨텍스트 제외.
+node_modules
+.next
+# 로컬 설정은 App Runner env로 주입(이미지에 굽지 않음).
+.env
+.env.*
+.git
+npm-debug.log*
+*.log
+.DS_Store
+coverage
+playwright-report
+test-results

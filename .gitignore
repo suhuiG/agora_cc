@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+.mypy_cache/
+
+# Node / web
+node_modules/
+.next/
+next-env.d.ts
+dist/
+build/
+out/
+
+# CDK / TypeScript 컴파일 산출물 (infra는 .ts가 소스)
+infra/**/*.js
+infra/**/*.d.ts
+cdk.out/
+# 계정별 context 조회 캐시 — 계정번호가 키에 들어가요.
+cdk.context.json
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# 로컬 스토어 fallback 데이터 (컨테이너 로컬 JSON)
+*.agora-store.json
+*.agora-aux.json
+*.agora-gov.json
+*.agora-gov.json.bak-*
+*.agora-bundle.json
+*.agora-publish-conn.json
+*.agora-publish-creds.json
+.agora-data/
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/

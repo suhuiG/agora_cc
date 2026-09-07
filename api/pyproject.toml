@@ -1,0 +1,45 @@
+[project]
+name = "agora-api"
+version = "0.1.0"
+description = "Agora — 사내 Agent 마켓플레이스 플랫폼 API (AgentCore Agent Registry 위의 퍼블리시·발견·거버넌스 레이어)"
+readme = {text = "Agora API", content-type = "text/plain"}
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "mangum>=0.19",
+    "PyJWT[crypto]>=2.10",
+    "uvicorn[standard]>=0.30",
+    # "boto3>=1.40",  # GA/preview SDK 확보 후 주석 해제
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.6",
+    # 생성 scaffold 가 요구하는 런타임 SDK 하한 — 배포 agent 동작을 이 버전에 맞춰 검증했어요.
+    "bedrock-agentcore==1.22.0",
+    "strands-agents==1.51.*",
+    # agent-registry 서비스 모델이 포함된 최소 버전.
+    "boto3>=1.43.71",
+    "httpx>=0.27",
+]
+aws = [
+    # agent-registry 서비스 모델이 포함된 최소 버전.
+    "boto3>=1.43.71",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"agora.domains.monitoring" = [
+    "deploy-jobs-scan-contract.json",
+    "retention-policy.json",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

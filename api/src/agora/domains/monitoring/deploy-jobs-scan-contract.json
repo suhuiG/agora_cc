@@ -1,0 +1,12 @@
+{
+  "tableKeyAttributes": [
+    "PK"
+  ],
+  "projectionAttributes": [
+    "asset_type",
+    "runtime_id",
+    "redeploy_record_id",
+    "record_id"
+  ],
+  "select": "SPECIFIC_ATTRIBUTES"
+}
