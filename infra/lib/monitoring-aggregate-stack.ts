@@ -39,6 +39,13 @@ export class MonitoringAggregateStack extends cdk.Stack {
   ) {
     super(scope, id, props);
 
+    // 형제 스택(catalog-storage·identity)과 같은 stage 분기예요. dev 에서 RETAIN 이면
+    // 첫 배포가 중간에 실패했을 때 테이블과 SSM 파라미터가 남고, 재시도가 changeset
+    // 단계에서 "already exists" 로 죽어요 — 사람이 수동으로 지워야 다시 배포돼요.
+    const removalPolicy = props.stage === "prod"
+      ? cdk.RemovalPolicy.RETAIN
+      : cdk.RemovalPolicy.DESTROY;
+
     const table = new dynamodb.Table(this, "AggregateTable", {
       tableName: `AgoraMonitoringAggregate-${props.stage}`,
       partitionKey: { name: "PK", type: dynamodb.AttributeType.STRING },
@@ -46,7 +53,7 @@ export class MonitoringAggregateStack extends cdk.Stack {
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
       timeToLiveAttribute: "expires_at",
-      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      removalPolicy,
     });
     const dlq = new sqs.Queue(this, "IngestDlq", {
       queueName: `agora-monitoring-ingest-dlq-${props.stage}`,
@@ -62,7 +69,7 @@ export class MonitoringAggregateStack extends cdk.Stack {
           "Account/region singleton claim for the aws/spans aggregate owner."
         ),
       });
-      ownerClaim.applyRemovalPolicy(cdk.RemovalPolicy.RETAIN);
+      ownerClaim.applyRemovalPolicy(removalPolicy);
 
       const ingest = new lambda.Function(this, "IngestFunction", {
         functionName: `agora-monitoring-aggregate-${props.stage}`,

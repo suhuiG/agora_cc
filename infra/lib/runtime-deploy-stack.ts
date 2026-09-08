@@ -327,9 +327,30 @@ export class RuntimeDeployStack extends cdk.Stack {
     new cdk.CfnOutput(this, "EcrUri", { value: repo.repositoryUri });
     new cdk.CfnOutput(this, "CodeBuildProject", { value: project.projectName });
     new cdk.CfnOutput(this, "DeployJobsTable", { value: jobsTable.tableName });
-    new cdk.CfnOutput(this, "ExecRoleArn", { value: execRole.roleArn });
+    // ⚠️ 이름이 가장 일반적인 `ExecRoleArn` 은 **AgentCore Runtime** 롤이에요 —
+    // `AGORA_DEPLOY_EXEC_ROLE_ARN` 이 아니에요. 그 env 는 Lambda 실행롤
+    // (`LambdaExecRoleArn`) 이고, PassRole grant 가
+    // `iam:PassedToService` 로 갈라져 있어서 잘못 매핑하면 MCP(배포형) 배포가
+    // `iam:PassRole` AccessDenied 로 죽어요. 의미가 드러나는 별칭을 함께 내보내요.
+    new cdk.CfnOutput(this, "ExecRoleArn", {
+      value: execRole.roleArn,
+      description:
+        "AgentCore Runtime execution role (legacy output name). "
+        + "Maps to AGORA_DEPLOY_AGENT_EXEC_ROLE_ARN, NOT AGORA_DEPLOY_EXEC_ROLE_ARN.",
+    });
+    new cdk.CfnOutput(this, "McpRuntimeExecRoleArn", {
+      value: execRole.roleArn,
+      description:
+        "Same value as ExecRoleArn, named for what it is. "
+        + "Passed only to bedrock-agentcore.amazonaws.com.",
+    });
     new cdk.CfnOutput(this, "ArtifactBucket", { value: artifactBucket.bucketName });
-    new cdk.CfnOutput(this, "LambdaExecRoleArn", { value: lambdaExecRole.roleArn });
+    new cdk.CfnOutput(this, "LambdaExecRoleArn", {
+      value: lambdaExecRole.roleArn,
+      description:
+        "MCP tool-provider Lambda execution role. "
+        + "Maps to AGORA_DEPLOY_EXEC_ROLE_ARN.",
+    });
     new cdk.CfnOutput(this, "GatewayExecRoleArn", { value: gatewayExecRole.roleArn });
     new cdk.CfnOutput(this, "CognitoUserPoolId", { value: userPool.userPoolId });
     new cdk.CfnOutput(this, "CognitoDiscoveryUrl", { value: this.cognitoDiscoveryUrl });
@@ -344,8 +365,12 @@ export class RuntimeDeployStack extends cdk.Stack {
     new cdk.CfnOutput(this, "GatewayId", { value: gateway.attrGatewayIdentifier });
     new cdk.CfnOutput(this, "GatewayUrl", { value: gateway.attrGatewayUrl });
     // AgentRuntimeExecRoleArn — create_agent_runtime의 roleArn 파라미터로 사용해요.
-    // 운영자가 AGORA_DEPLOY_EXEC_ROLE_ARN(또는 전용 env)에 이 ARN을 설정해요(Task 8).
-    new cdk.CfnOutput(this, "AgentRuntimeExecRoleArn", { value: agentExecRole.roleArn });
+    // 운영자는 이 ARN 을 `AGORA_DEPLOY_AGENT_EXEC_ROLE_ARN` 에 넣어요.
+    // `AGORA_DEPLOY_EXEC_ROLE_ARN` 에 넣으면 안 돼요 — 그건 Lambda 실행롤 자리예요.
+    new cdk.CfnOutput(this, "AgentRuntimeExecRoleArn", {
+      value: agentExecRole.roleArn,
+      description: "Maps to AGORA_DEPLOY_AGENT_EXEC_ROLE_ARN.",
+    });
     new cdk.CfnOutput(this, "BuiltinToolExecRoleArn", {
       value: builtinToolExecRole.roleArn,
     });
