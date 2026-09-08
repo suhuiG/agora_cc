@@ -20,6 +20,27 @@ def _client(clients, name, region):
     return boto3.client(name, region_name=region)
 
 
+def _task_stop_detail(task):
+    """STOPPED 태스크가 정상 종료가 아니었으면 사람이 읽을 이유를, 아니면 빈 문자열.
+
+    컨테이너 `exitCode == 0` 이면 결과 객체가 있을 것으로 보고 빈 문자열을 돌려줘요.
+    exitCode 가 아예 없으면(컨테이너가 시작조차 못 함) 그것도 실패로 봐요.
+    """
+    if not task:
+        return ""
+    containers = task.get("containers") or []
+    scanner = containers[0] if containers else {}
+    exit_code = scanner.get("exitCode")
+    if exit_code == 0:
+        return ""
+    parts = [p for p in (
+        task.get("stoppedReason"),
+        scanner.get("reason"),
+        None if exit_code is None else f"exitCode={exit_code}",
+    ) if p]
+    return " / ".join(parts) or "컨테이너가 시작되지 않았어요"
+
+
 def _fail_closed(tool_id, area, reason):
     return {"tool_id": tool_id, "area": area, "risk": "high",
             "findings": [{"code": "SCANNER_ERROR", "severity": "high", "detail": reason, "location": ""}],
@@ -79,14 +100,23 @@ def handler(event, context, clients=None, sleep=time.sleep):
                 raise RuntimeError((resp.get("failures") or [{}])[0].get("reason", "run_task 실패"))
             task_arn = resp["tasks"][0]["taskArn"]
             deadline = time.monotonic() + int(os.getenv("SCAN_TIMEOUT", "300"))
+            stopped = {}
             while True:
                 desc = ecs.describe_tasks(cluster=os.getenv("SCAN_CLUSTER", ""), tasks=[task_arn])
                 tasks = desc.get("tasks", [])
                 if tasks and tasks[0].get("lastStatus") == "STOPPED":
+                    stopped = tasks[0]
                     break
                 if time.monotonic() >= deadline:
                     return _fail_closed(tool_id, area, f"{tool_id} fargate 폴링 타임아웃")
                 sleep(5)
+            # 태스크가 컨테이너를 못 띄우면(예: ECR 이미지 미push → CannotPullContainerError)
+            # 결과 객체가 안 생겨서 아래 get_object 가 NoSuchKey 로 떨어져요. NoSuchKey 는
+            # 원인을 전혀 안 알려주니까 태스크의 stop 이유를 먼저 실어 보내요.
+            _stop_detail = _task_stop_detail(stopped)
+            if _stop_detail:
+                return _fail_closed(
+                    tool_id, area, f"{tool_id} fargate 태스크 실패: {_stop_detail}")
             s3 = _client(clients, "s3", region)
             obj = s3.get_object(Bucket=bucket, Key=out_key)
             data = json.loads(obj["Body"].read())

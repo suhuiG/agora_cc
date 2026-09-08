@@ -85,12 +85,22 @@ export class GovernanceScanToolsStack extends cdk.Stack {
         });
         bucket.grantReadWrite(fn);
         if (tool.toolId === "llm-judge") {
-          // Global inference profile은 계정 리소스와 대상 foundation model 권한이 모두
-          // 필요해요. 리소스 유형과 요청 리전을 고정해 bare Resource "*"를 피합니다.
+          // Global inference profile은 계정 리소스(profile)와 대상 foundation model 권한이
+          // 모두 필요해요. **두 자리의 조건이 달라요.**
+          //
+          // profile 은 호출 endpoint 리전에서 평가되니 `aws:RequestedRegion` 을 고정할 수
+          // 있어요. 반면 foundation model 인가는 global profile 이 **라우팅한 리전**에서
+          // 평가돼요 — 그래서 model 쪽에도 같은 리전 조건을 걸면
+          // `bedrock:InvokeModel on arn:aws:bedrock:::foundation-model/…` 이 implicitDeny 로
+          // 떨어져요.
+          //
+          // 리전 고정 모델 ID 로 우회할 수도 없어요. `anthropic.claude-sonnet-4-6` 은
+          // ap-northeast-2 에서 `INFERENCE_PROFILE` 만 지원하고, 그 리전에 존재하는 profile
+          // 이 `global.…` 하나예요. 그래서 model statement 에는 계정 조건만 걸어요.
           fn.addToRolePolicy(new iam.PolicyStatement({
+            sid: "InvokeInferenceProfileInRegion",
             actions: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
             resources: [
-              `arn:${this.partition}:bedrock:*::foundation-model/*`,
               `arn:${this.partition}:bedrock:${this.region}:${this.account}:inference-profile/*`,
               `arn:${this.partition}:bedrock:${this.region}:${this.account}:application-inference-profile/*`,
             ],
@@ -99,6 +109,16 @@ export class GovernanceScanToolsStack extends cdk.Stack {
                 "aws:RequestedRegion": this.region,
                 "aws:PrincipalAccount": this.account,
               },
+            },
+          }));
+          fn.addToRolePolicy(new iam.PolicyStatement({
+            sid: "InvokeRoutedFoundationModel",
+            actions: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
+            resources: [
+              `arn:${this.partition}:bedrock:*::foundation-model/*`,
+            ],
+            conditions: {
+              StringEquals: { "aws:PrincipalAccount": this.account },
             },
           }));
         }
