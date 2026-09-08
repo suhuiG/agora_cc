@@ -599,6 +599,25 @@ class SharedPolicyProvisioner:
             )
             return report
 
+        # 빈 선언 예외의 **전제가 낡았는지** 확인해요.
+        #
+        # `allow_empty_declaration` 은 위에서 읽은 「엔진이 비어 있다」는 관측에 기대요. 그
+        # 관측과 여기의 `existing` 읽기 사이에 다른 provision 이 `Gateway_*_r1` 을 만들 수
+        # 있어요. 그러면 우리는 정책 0장을 원하는 상태로 들고 있는데 `existing` 은 1장이라,
+        # 아래 삭제 루프가 **방금 만들어진 살아 있는 리비전을 지우고** `ok=True` 로 보고해요.
+        # 리비전이 하나뿐이면 `stale_revisions` 도 비어서 경고조차 안 남아요.
+        #
+        # 원자성 기제를 만들지 않고 전제만 다시 확인해요 — 전제가 깨졌으면 아무것도 하지
+        # 않고 물러나요. 재시도는 그 리비전을 보고 정상 경로를 타요.
+        if allow_empty_declaration and existing:
+            report.ok = False
+            report.verdict = "unknown"
+            report.reason = (
+                "「엔진이 비어 있다」는 관측이 낡았어요 — 그 사이 공유 정책 "
+                f"{len(existing)}장이 생겼어요. 지우지 않고 물러나요; 재시도하세요."
+            )
+            return report
+
         report.stale_revisions = self._stale_revision_names(existing)
 
         revision = self._next_revision(existing) if existing else 1

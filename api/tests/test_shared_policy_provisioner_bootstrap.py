@@ -39,10 +39,15 @@ class FakeControl:
     `None` 관측 실패(`get_gateway` 가 던짐).
     """
 
-    def __init__(self, policies=(), *, interceptor: bool | None = True):
+    def __init__(self, policies=(), *, interceptor: bool | None = True, then=None):
         self.policies = list(policies)
+        # `then` 이 있으면 **두 번째 이후** `list_policies` 가 그 목록을 돌려줘요. 「첫 조회는
+        # 비었는데 그 사이 정책이 생겼다」는 경합을 표현해야 삭제 루프를 시험할 수 있어요.
+        self.then = None if then is None else list(then)
         self.interceptor = interceptor
+        self.list_calls = 0
         self.created: list[dict] = []
+        self.deleted: list[dict] = []
 
     def get_gateway(self, **_kw):
         if self.interceptor is None:
@@ -58,11 +63,18 @@ class FakeControl:
 
     def list_policies(self, **_kw):
         # 응답 키는 `policies` 예요. `items` 로 주면 provisioner 가 RuntimeError 를 내요.
+        self.list_calls += 1
+        if self.then is not None and self.list_calls > 1:
+            return {"policies": self.then}
         return {"policies": self.policies}
 
     def create_policy(self, **kw):
         self.created.append(kw)
         return {"policyId": "p-1", "status": "ACTIVE"}
+
+    def delete_policy(self, **kw):
+        self.deleted.append(kw)
+        return {}
 
 
 class FakeStore:
@@ -197,14 +209,39 @@ def test_structural_checks_still_run_on_an_empty_bootstrap():
 
 
 def test_duplicate_target_names_are_refused_on_an_empty_bootstrap():
-    """같은 축의 다른 구조 검사(Target 이름 중복)도 살아 있는지 확인해요."""
+    """같은 축의 다른 구조 검사(Target 이름 중복)도 살아 있는지 확인해요.
+
+    `sensitivity` 는 반드시 유효한 값(READ/CREATE/UPDATE/DELETE)이어야 해요. 잘못된 값을 주면
+    민감도 검사가 **먼저** 거부해서, 이 테스트가 중복 검사를 증명하지 못하고 통과해요.
+    """
     dup = (
-        GatewayPolicyTarget(name="t1", sensitivity="low", operations=("read",)),
-        GatewayPolicyTarget(name="t1", sensitivity="low", operations=("read",)),
+        GatewayPolicyTarget(name="t1", sensitivity="READ", operations=("read",)),
+        GatewayPolicyTarget(name="t1", sensitivity="READ", operations=("read",)),
     )
     control = FakeControl(policies=[])
     report = _provision(control, FakeStore(), spec=_spec(targets=dup))
 
     assert report.ok is False
     assert report.verdict == "refused"
+    assert "중복" in report.reason
+    assert control.created == []
+
+
+def test_stale_empty_engine_observation_does_not_delete():
+    """「엔진이 비어 있다」는 관측이 낡았으면 삭제하지 않고 물러나요.
+
+    첫 조회는 비었는데 그 사이 다른 provision 이 `Gateway_*_r1` 을 만든 경합이에요. 물러나지
+    않으면 원하는 상태가 «정책 0장» 이라 삭제 루프가 **방금 만들어진 살아 있는 리비전**을 지우고
+    `ok=True` 로 보고해요. 리비전이 하나뿐이면 `stale_revisions` 도 비어서 경고조차 안 남아요.
+    """
+    control = FakeControl(
+        policies=[],
+        then=[{"name": _owned_policy_name(1), "policyId": "p-live"}],
+    )
+    report = _provision(control, FakeStore())
+
+    assert report.ok is False
+    assert report.verdict == "unknown"
+    assert "낡았어요" in report.reason
+    assert control.deleted == []
     assert control.created == []
