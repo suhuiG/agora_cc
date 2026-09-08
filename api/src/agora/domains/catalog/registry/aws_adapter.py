@@ -82,7 +82,7 @@ class AwsRegistryAdapter:
         *,
         region: str = "us-east-1",
         registry_id: str = "",
-        namespace: str = "bedrock-agentcore",
+        namespace: str = "agent-registry",
         aux=None,
         control_client=None,
         data_client=None,

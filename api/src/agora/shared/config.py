@@ -8,8 +8,10 @@
   AGORA_ROLE      local | portal | lambda. 실행환경 구분자이며 명시 필수(AGORA_STAGE와 별개).
   AGORA_STAGE     dev | prod
   AGORA_REGION    Registry(AgentCore) 리전 (us-east-1 고정)
-  AGORA_REGISTRY_NAMESPACE  Registry 서비스 네임스페이스 (bedrock-agentcore 기본 | agent-registry).
+  AGORA_REGISTRY_NAMESPACE  Registry 서비스 네임스페이스 (agent-registry 기본 | bedrock-agentcore).
                     agent-registry는 boto 서비스명·`.api.aws` endpoint·descriptor 스키마가 달라요(CA-05/ADR-0015).
+                    구 bedrock-agentcore 네임스페이스는 신규 계정에서 IAM 이 아예 거부해요
+                    (Admin 으로도 `bedrock-agentcore:ListRegistries` AccessDenied) — rollback 용으로만 남겨요.
   AGORA_TABLE_NAME  DynamoDB 테이블명 (필수)
   AGORA_BUCKET_NAME S3 버킷명 (필수)
   AGORA_REGISTRY_ID Registry ID (미지정 시 이름으로 조회/생성)
@@ -267,7 +269,7 @@ class Config:
     dev_identity_token_ttl_minutes: int = 60
     web_base_url: str | None = None                  # [E] stack-owned public portal origin.
     authorization_mode: str = "agent_policy"       # agent_policy | legacy_delegated. 런타임 tool 인가 모델(IA-19).
-    registry_namespace: str = "bedrock-agentcore"  # bedrock-agentcore | agent-registry. Registry 서비스 네임스페이스(CA-05/ADR-0015).
+    registry_namespace: str = "agent-registry"     # agent-registry | bedrock-agentcore(폐기). Registry 서비스 네임스페이스(CA-05/ADR-0015).
 
 
 def load_config() -> Config:
@@ -446,7 +448,7 @@ def load_config() -> Config:
     authorization_mode = os.environ.get(
         "AGORA_AUTHORIZATION_MODE", "agent_policy").lower()
     registry_namespace = os.environ.get(
-        "AGORA_REGISTRY_NAMESPACE", _OLD_REGISTRY_NAMESPACE).lower()
+        "AGORA_REGISTRY_NAMESPACE", _NEW_REGISTRY_NAMESPACE).lower()
 
     if role not in ("local", "portal", "lambda"):
         raise ValueError(
