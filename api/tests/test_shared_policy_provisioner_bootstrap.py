@@ -13,7 +13,10 @@ from __future__ import annotations
 
 import pytest
 
-from agora.domains.identity.agent_policy_compiler import SharedGatewayPolicySpec
+from agora.domains.identity.agent_policy_compiler import (
+    GatewayPolicyTarget,
+    SharedGatewayPolicySpec,
+)
 from agora.domains.identity.models import AgentAuthorizationLedgerSnapshot
 from agora.domains.identity.shared_policy_provisioner import (
     _NAME_PREFIX,
@@ -80,20 +83,22 @@ class FakeStore:
         return []
 
 
-def _spec():
-    return SharedGatewayPolicySpec(
+def _spec(**over):
+    fields = dict(
         gateway_arn=GATEWAY_ARN,
         targets=(),
         invoke_scope=SCOPE,
         scope_names=(SCOPE,),
     )
+    fields.update(over)
+    return SharedGatewayPolicySpec(**fields)
 
 
-def _provision(control, store):
+def _provision(control, store, spec=None):
     return SharedPolicyProvisioner(control, store, sleep=lambda *_: None).provision(
         gateway_id=GATEWAY_ID,
         engine_id=ENGINE_ID,
-        spec_without_interceptor=_spec(),
+        spec_without_interceptor=spec or _spec(),
         created_by="test",
     )
 
@@ -151,7 +156,8 @@ def test_noop_requires_a_completely_empty_engine():
     control = FakeControl(policies=[{"name": "DomainRule_stale", "policyId": "p-orphan"}])
     report = _provision(control, FakeStore())
 
-    assert report.verdict != "unchanged"
+    assert report.ok is False
+    assert report.verdict == "refused"
     assert control.created == []
 
 
@@ -168,6 +174,37 @@ def test_noop_requires_interceptor_attached(interceptor, label):
     control = FakeControl(policies=[], interceptor=interceptor)
     report = _provision(control, FakeStore())
 
-    assert report.verdict != "unchanged", label
+    assert report.verdict == "refused", label
     assert report.ok is False
+    assert "interceptor" in report.reason
+    assert control.created == []
+
+
+def test_structural_checks_still_run_on_an_empty_bootstrap():
+    """빈 원장·빈 엔진이어도 컴파일러의 **구조 검사**는 그대로 돌아요.
+
+    빈 선언 가드만 끄는 플래그를 넘기지 않고 compile 앞에서 조기 반환하면, gateway ARN 형식·
+    scope 접두어 충돌·Target 이름 중복 같은 검사를 전부 건너뛰어요. 그러면 잘못된 bootstrap
+    입력이 «바꿀 것 없음» 으로 성공 보고돼요. 이 테스트가 그 우회를 막아요.
+    """
+    control = FakeControl(policies=[])
+    report = _provision(control, FakeStore(), spec=_spec(gateway_arn="not-an-arn"))
+
+    assert report.ok is False
+    assert report.verdict == "refused"
+    assert "gateway ARN" in report.reason
+    assert control.created == []
+
+
+def test_duplicate_target_names_are_refused_on_an_empty_bootstrap():
+    """같은 축의 다른 구조 검사(Target 이름 중복)도 살아 있는지 확인해요."""
+    dup = (
+        GatewayPolicyTarget(name="t1", sensitivity="low", operations=("read",)),
+        GatewayPolicyTarget(name="t1", sensitivity="low", operations=("read",)),
+    )
+    control = FakeControl(policies=[])
+    report = _provision(control, FakeStore(), spec=_spec(targets=dup))
+
+    assert report.ok is False
+    assert report.verdict == "refused"
     assert control.created == []

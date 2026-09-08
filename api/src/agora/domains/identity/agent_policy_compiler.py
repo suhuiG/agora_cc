@@ -293,6 +293,8 @@ def _compiled_shared_policy(
 
 def compile_shared_gateway_policies(
     spec: SharedGatewayPolicySpec,
+    *,
+    allow_empty_declaration: bool = False,
 ) -> CompiledSharedGatewayPolicies:
     """Gateway 공유 ① 정책과 IA-85 완전성 게이트를 컴파일해요.
 
@@ -438,7 +440,19 @@ def compile_shared_gateway_policies(
         if binding.approval_state is ApprovalState.APPROVED:
             approved_actions.add(action)
 
-    if not declared_actions:
+    # `allow_empty_declaration` 은 **호출자가 「지울 리비전이 없음」을 관측했다**는 뜻이에요.
+    # 이 가드는 관측 실패가 살아 있는 리비전을 빈 집합으로 덮는 걸 막으려고 있어요. 지킬
+    # 리비전이 애초에 0장이면 그 사고가 성립하지 않고, 거부로 두면 신규 계정의 첫 배포가
+    # 영구히 막혀요(도구 인가 승인은 배포 **후** 절차라서 순환).
+    #
+    # ⚠️ 이 플래그는 **이 가드 하나만** 끄고, 앞의 구조 검사(gateway ARN·scope 접두어 충돌·
+    # Target 이름 중복·interceptor 부착·원장 관측 여부)는 전부 그대로 통과해야 해요. 그래서
+    # 호출자가 provisioner 바깥에서 이 검사들을 손으로 복제할 필요가 없어요.
+    #
+    # 판정 근거의 소유자는 호출자(엔진 관측)예요 — 이 순수 함수는 AWS 를 볼 수 없으니
+    # 스스로 이 조건을 만들어낼 수 없고, 만들어내면 게이트가 자기 기대값을 정하는 셈이에요
+    # (ADR-0037 §4).
+    if not declared_actions and not allow_empty_declaration:
         raise InvalidPolicyInput(
             "선언된 ④ binding이 0건이라 공유 ① 정책을 빈 집합으로 교체하지 않아요. "
             "원장을 관측한 결과와 관측 실패는 구분하며, 기존 리비전은 보존해요."

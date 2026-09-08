@@ -513,42 +513,32 @@ class SharedPolicyProvisioner:
             report.reason = ledger_reason
             return report
 
-        # 아무것도 없는 엔진 — 만들 것도 지울 것도 없어요.
+        # 아직 아무것도 없는 엔진 — 컴파일러의 「빈 집합으로 교체하지 않아요」 가드가 지킬
+        # 리비전이 없는 상태예요.
         #
-        # 컴파일러의 "빈 집합으로 교체하지 않아요" 가드는 관측 실패가 **살아 있는** 리비전을
-        # 지우는 것을 막으려고 있어요(`agent_policy_compiler`). 지킬 리비전이 애초에 없으면
-        # 그 사고가 성립하지 않아요. 이 상태를 거부로 다루면 첫 MCP 배포가
-        # `registering_target` 에서 죽어요 — 도구 인가 승인은 배포 **후**에 하는 절차라서
-        # 아무도 첫 배포를 통과할 수 없어요(순환).
+        # 그 가드는 관측 실패가 **살아 있는** 리비전을 덮는 걸 막아요. 정책이 0장이면 그
+        # 사고가 성립하지 않는데, 거부로 두면 신규 계정의 첫 MCP 배포가 `registering_target`
+        # 에서 영구히 막혀요 — 도구 인가 승인은 배포 **후** 절차라서 순환이에요.
         #
-        # 세 조건을 **모두** 만족할 때만 지나가요. 하나라도 빠지면 아래 정상 경로가 원래
-        # 가드로 판정해요.
+        # ⚠️ 여기서 조기 반환하지 않아요. compile 앞에서 빠져나가면 컴파일러의 선행 검사
+        # (gateway ARN·scope 접두어 충돌·Target 이름 중복·interceptor 부착·원장 관측 여부)를
+        # 전부 건너뛰고, 그 검사들을 이 자리에 손으로 복제해야 해요. 대신 **그 가드 하나만**
+        # 끄는 플래그를 넘겨서 나머지 검사와 삭제·멱등 판정은 정상 경로를 그대로 타요.
         #
-        # 1. `attached is True` — interceptor 부착은 컴파일러가 **무조건** 요구하는 선행
-        #    조건이에요(`agent_policy_compiler` 의 `request_interceptor_attached is not True`
-        #    분기). 여기서 그 검사를 건너뛰면 강제 지점이 떨어진 Gateway 를 «성공» 으로
-        #    보고해요 — 부착 여부를 관측하지 못한 `None` 도 통과로 접지 않아요.
-        # 2. 원장이 **관측에 성공했고** 0건 — 관측 실패는 위 `ledger_reason` 에서 이미
-        #    `verdict="unknown"` 으로 갈라졌어요.
-        # 3. 엔진에 정책이 **계열 무관 0장** — `_owned_policies` 는 `Gateway_{hash}_` 만 세서
-        #    `DomainRule_*` 같은 다른 계열의 잔존 permit 을 못 봐요. 그 상태를 「없음」으로
-        #    읽으면 폐기된 permit 이 살아 있는데도 no-op 이 성공을 보고해요.
-        if attached is True and not bindings and not rules:
+        # 판정 근거는 이 계층이 소유해요(컴파일러는 순수 함수라 AWS 를 볼 수 없어요).
+        # `_owned_policies` 가 아니라 `_list_policies` 로 **계열 무관** 전량을 봐요 —
+        # `Gateway_{hash}_` 만 세면 `DomainRule_*` 같은 다른 계열의 잔존 permit 을 「없음」으로
+        # 읽어서, 폐기된 permit 이 살아 있는데도 빈 집합을 성공으로 보고해요.
+        allow_empty_declaration = False
+        if not bindings and not rules:
             try:
-                engine_policies = self._list_policies(engine_id)
+                allow_empty_declaration = not self._list_policies(engine_id)
             except Exception as exc:
                 report.ok = False
                 report.verdict = "unknown"
                 report.reason = (
                     "기존 정책 목록을 읽지 못해 아무것도 바꾸지 않았어요: "
                     f"{type(exc).__name__}: {exc}"
-                )
-                return report
-            if not engine_policies:
-                report.verdict = "unchanged"
-                report.reason = (
-                    "선언된 ④ binding·② rule 이 0건이고 policy engine 이 비어 있어요. "
-                    "interceptor 부착은 확인했고, 만들 것도 지울 리비전도 없어요."
                 )
                 return report
 
@@ -576,7 +566,9 @@ class SharedPolicyProvisioner:
             )
         report.live_inventory_status = inventory_status
         try:
-            compiled = compile_shared_gateway_policies(spec)
+            compiled = compile_shared_gateway_policies(
+                spec, allow_empty_declaration=allow_empty_declaration
+            )
         except InvalidPolicyInput as exc:
             report.ok = False
             report.verdict = "refused"
@@ -618,7 +610,13 @@ class SharedPolicyProvisioner:
         # 반환해요. 그 상태에서 원장이 ACTIVE 라고 말한 ② 정책이 엔진에 실제로 없으면
         # **전면 거부인데 `ok=True, verdict="unchanged"`** 예요 — 삭제 전환 때 한 번만 보고
         # 그 뒤로는 영원히 안 보는 게 문제예요(codex 리뷰 P2).
-        if not compiled.policies:
+        #
+        # `allow_empty_declaration` 인 경우는 빼요. 이 검사는 「원장이 ACTIVE 라고 말한 ②
+        # 정책」이 실재하는지 대조하는 건데, 그때 원장은 ② 를 하나도 주장하지 않아요(`rules`
+        # 가 비어 있고 그게 이 플래그의 전제예요). 기대 집합이 없으면
+        # `_observe_domain_rule_policies` 는 정의상 `False` 라, 검사가 아니라 무조건 거부가
+        # 돼요.
+        if not compiled.policies and not allow_empty_declaration:
             live_rules, why = self._observe_domain_rule_policies(
                 engine_id, compiled.gateway_arn, rules
             )
