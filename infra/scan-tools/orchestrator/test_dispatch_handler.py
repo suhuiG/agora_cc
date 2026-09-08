@@ -11,12 +11,20 @@ class FakeLambda:
 
 
 class FakeEcs:
-    def __init__(self): self.calls = []
+    """스캐너 컨테이너 계약은 「항상 exit 0」이에요(scan-runner/entrypoint.py).
+
+    `stopped` 를 주면 컨테이너가 못 뜬 상황(예: ECR 이미지 미push)을 흉내내요.
+    """
+    def __init__(self, stopped=None):
+        self.calls = []
+        self._stopped = stopped or {
+            "lastStatus": "STOPPED", "containers": [{"exitCode": 0}],
+        }
     def run_task(self, **kw):
         self.calls.append(kw)
         return {"tasks": [{"taskArn": "arn:task/1"}], "failures": []}
     def describe_tasks(self, **kw):
-        return {"tasks": [{"lastStatus": "STOPPED"}]}
+        return {"tasks": [self._stopped]}
 
 
 class FakeS3Result:
@@ -78,6 +86,34 @@ def test_fargate_compute_runs_task_and_reads_s3(monkeypatch):
     out = h.handler(_event(tool_id="semgrep", area="sast", compute="fargate", image_ref="uri/semgrep"),
                     None, clients={"ecs": FakeEcs(), "s3": s3}, sleep=lambda *_: None)
     assert out["scanned_areas"] == ["sast"]
+    assert out["risk"] == "none" and out["findings"] == []
+
+
+def test_fargate_container_never_started_reports_stop_reason(monkeypatch):
+    """ECR 이미지 미push 를 `NoSuchKey` 로 가리지 않아요.
+
+    컨테이너가 못 뜨면 결과 객체가 없어서 S3 조회가 `NoSuchKey` 로 떨어지는데, 그 메시지만
+    보면 운영자가 원인(이미지 미push)을 알 수 없어요. 태스크 stop 이유를 실어요.
+    """
+    import dispatch_handler as h
+    monkeypatch.setenv("AGORA_STAGE", "dev")
+    monkeypatch.setenv("SCAN_CLUSTER", "c"); monkeypatch.setenv("SCAN_SUBNETS", "sub1")
+    monkeypatch.setenv("SCAN_SG", "sg1")
+    ecs = FakeEcs(stopped={
+        "lastStatus": "STOPPED",
+        "stoppedReason": "CannotPullContainerError: … agora-tool-semgrep-dev:latest: not found",
+        "containers": [{}],
+    })
+
+    class BoomS3:
+        def get_object(self, **kw):
+            raise AssertionError("stop 이유가 있으면 S3 를 읽지 않아요")
+
+    out = h.handler(_event(tool_id="semgrep", area="sast", compute="fargate", image_ref="uri/semgrep"),
+                    None, clients={"ecs": ecs, "s3": BoomS3()}, sleep=lambda *_: None)
+    assert out["risk"] == "high"
+    detail = out["findings"][0]["detail"]
+    assert "CannotPullContainerError" in detail and "NoSuchKey" not in detail
 
 
 def test_tool_error_fail_closed(monkeypatch):

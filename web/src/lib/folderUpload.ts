@@ -7,9 +7,11 @@
  */
 import type { SourceFile } from "./api";
 
+// `lock` 은 lockfile(uv.lock·poetry.lock·Cargo.lock)이에요. 전부 텍스트고 빌드 입력인데,
+// 제외하면 배포 빌드가 lock 없이 의존성을 다시 풀어 재현성이 깨져요.
 const TEXT_EXTS = new Set([
   "md", "txt", "json", "yaml", "yml", "py", "ts", "js", "tsx", "jsx",
-  "sh", "toml", "csv", "ini", "cfg", "env", "gitignore",
+  "sh", "toml", "csv", "ini", "cfg", "env", "gitignore", "lock",
 ]);
 
 // 점으로 시작하는 알려진 텍스트 설정 파일(확장자 규칙이 아니라 파일명으로 판정).

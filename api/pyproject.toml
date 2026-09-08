@@ -15,6 +15,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "ruff>=0.6",
+    "pytest>=8",
     # 생성 scaffold 가 요구하는 런타임 SDK 하한 — 배포 agent 동작을 이 버전에 맞춰 검증했어요.
     "bedrock-agentcore==1.22.0",
     "strands-agents==1.51.*",

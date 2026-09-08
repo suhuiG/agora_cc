@@ -157,7 +157,9 @@ const SCANNER_LABELS: Record<string, { label: string; where: string; real: boole
 // 사이드바 하단 — 현재 role + 스캐너 모드 배지.
 function SidebarFooter() {
   const { data: me } = useSWR<GovMe>("gov/me", getGovMe);
-  const role = me?.roles?.[0] ?? "…";
+  // roles 전체를 보여줘요. 첫 항목만 찍으면 admin+user 인 사람이 관리자 콘솔에서
+  // `role: user` 로 보여서 권한을 잘못 의심하게 돼요.
+  const role = me?.roles?.length ? me.roles.join(", ") : "…";
   const mode = me?.mode;
   const scanner = mode?.scanner ?? "";
   const info = SCANNER_LABELS[scanner] ?? { label: scanner, where: "", real: false };

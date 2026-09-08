@@ -288,8 +288,10 @@ new RuntimeAuthorizationStack(app, `AgoraRuntimeAuthorization-${stage}`, {
   artifactsBucket: catalogStorageStack.artifactsBucket,
   identityDataTable: identityStack.identityDataTable,
   registryId: process.env.AGORA_REGISTRY_ID ?? "",
-  // CA-05/ADR-0015: 컷오버 전엔 bedrock-agentcore(기본). 이관 완료 후 env로 agent-registry 전환.
-  registryNamespace: process.env.AGORA_REGISTRY_NAMESPACE ?? "bedrock-agentcore",
+  // CA-05/ADR-0015: 컷오버가 끝나서 agent-registry 가 기본이에요. 이 스택의 registry IAM
+  // grant(catalog-storage-stack)도 `agent-registry:*` 만 부여해요. 구 bedrock-agentcore 는
+  // 신규 계정에서 IAM 이 거부하므로(Admin 도 AccessDenied) rollback 용으로만 남겨요.
+  registryNamespace: process.env.AGORA_REGISTRY_NAMESPACE ?? "agent-registry",
   // IA-79: Portal과 Runtime authorizer Lambda가 같은 명시적 사람-pool 좌표를 읽어요.
   // 값이 없는 독립 synth는 기존 RuntimeDeploy 출력으로 유지하고, 컷오버 배포는
   // AGORA_DEPLOY_COGNITO_* 네 좌표를 한 세트로 공급합니다.

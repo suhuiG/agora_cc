@@ -513,6 +513,35 @@ class SharedPolicyProvisioner:
             report.reason = ledger_reason
             return report
 
+        # 아직 아무것도 없는 엔진 — 컴파일러의 「빈 집합으로 교체하지 않아요」 가드가 지킬
+        # 리비전이 없는 상태예요.
+        #
+        # 그 가드는 관측 실패가 **살아 있는** 리비전을 덮는 걸 막아요. 정책이 0장이면 그
+        # 사고가 성립하지 않는데, 거부로 두면 신규 계정의 첫 MCP 배포가 `registering_target`
+        # 에서 영구히 막혀요 — 도구 인가 승인은 배포 **후** 절차라서 순환이에요.
+        #
+        # ⚠️ 여기서 조기 반환하지 않아요. compile 앞에서 빠져나가면 컴파일러의 선행 검사
+        # (gateway ARN·scope 접두어 충돌·Target 이름 중복·interceptor 부착·원장 관측 여부)를
+        # 전부 건너뛰고, 그 검사들을 이 자리에 손으로 복제해야 해요. 대신 **그 가드 하나만**
+        # 끄는 플래그를 넘겨서 나머지 검사와 삭제·멱등 판정은 정상 경로를 그대로 타요.
+        #
+        # 판정 근거는 이 계층이 소유해요(컴파일러는 순수 함수라 AWS 를 볼 수 없어요).
+        # `_owned_policies` 가 아니라 `_list_policies` 로 **계열 무관** 전량을 봐요 —
+        # `Gateway_{hash}_` 만 세면 `DomainRule_*` 같은 다른 계열의 잔존 permit 을 「없음」으로
+        # 읽어서, 폐기된 permit 이 살아 있는데도 빈 집합을 성공으로 보고해요.
+        allow_empty_declaration = False
+        if not bindings and not rules:
+            try:
+                allow_empty_declaration = not self._list_policies(engine_id)
+            except Exception as exc:
+                report.ok = False
+                report.verdict = "unknown"
+                report.reason = (
+                    "기존 정책 목록을 읽지 못해 아무것도 바꾸지 않았어요: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                return report
+
         inventory, inventory_reason = self.observe_live_gateway_inventory(
             gateway_id, needed_targets=_declared_target_names(bindings)
         )
@@ -537,7 +566,9 @@ class SharedPolicyProvisioner:
             )
         report.live_inventory_status = inventory_status
         try:
-            compiled = compile_shared_gateway_policies(spec)
+            compiled = compile_shared_gateway_policies(
+                spec, allow_empty_declaration=allow_empty_declaration
+            )
         except InvalidPolicyInput as exc:
             report.ok = False
             report.verdict = "refused"
@@ -568,6 +599,25 @@ class SharedPolicyProvisioner:
             )
             return report
 
+        # 빈 선언 예외의 **전제가 낡았는지** 확인해요.
+        #
+        # `allow_empty_declaration` 은 위에서 읽은 「엔진이 비어 있다」는 관측에 기대요. 그
+        # 관측과 여기의 `existing` 읽기 사이에 다른 provision 이 `Gateway_*_r1` 을 만들 수
+        # 있어요. 그러면 우리는 정책 0장을 원하는 상태로 들고 있는데 `existing` 은 1장이라,
+        # 아래 삭제 루프가 **방금 만들어진 살아 있는 리비전을 지우고** `ok=True` 로 보고해요.
+        # 리비전이 하나뿐이면 `stale_revisions` 도 비어서 경고조차 안 남아요.
+        #
+        # 원자성 기제를 만들지 않고 전제만 다시 확인해요 — 전제가 깨졌으면 아무것도 하지
+        # 않고 물러나요. 재시도는 그 리비전을 보고 정상 경로를 타요.
+        if allow_empty_declaration and existing:
+            report.ok = False
+            report.verdict = "unknown"
+            report.reason = (
+                "「엔진이 비어 있다」는 관측이 낡았어요 — 그 사이 공유 정책 "
+                f"{len(existing)}장이 생겼어요. 지우지 않고 물러나요; 재시도하세요."
+            )
+            return report
+
         report.stale_revisions = self._stale_revision_names(existing)
 
         revision = self._next_revision(existing) if existing else 1
@@ -579,7 +629,13 @@ class SharedPolicyProvisioner:
         # 반환해요. 그 상태에서 원장이 ACTIVE 라고 말한 ② 정책이 엔진에 실제로 없으면
         # **전면 거부인데 `ok=True, verdict="unchanged"`** 예요 — 삭제 전환 때 한 번만 보고
         # 그 뒤로는 영원히 안 보는 게 문제예요(codex 리뷰 P2).
-        if not compiled.policies:
+        #
+        # `allow_empty_declaration` 인 경우는 빼요. 이 검사는 「원장이 ACTIVE 라고 말한 ②
+        # 정책」이 실재하는지 대조하는 건데, 그때 원장은 ② 를 하나도 주장하지 않아요(`rules`
+        # 가 비어 있고 그게 이 플래그의 전제예요). 기대 집합이 없으면
+        # `_observe_domain_rule_policies` 는 정의상 `False` 라, 검사가 아니라 무조건 거부가
+        # 돼요.
+        if not compiled.policies and not allow_empty_declaration:
             live_rules, why = self._observe_domain_rule_policies(
                 engine_id, compiled.gateway_arn, rules
             )
