@@ -38,6 +38,9 @@ cdk.context.json
 *.agora-publish-creds.json
 .agora-data/
 
+# 브라우저 자동화 스크래치(스냅샷·업로드 임시본)
+.playwright-mcp/
+
 # OS / editor
 .DS_Store
 *.swp

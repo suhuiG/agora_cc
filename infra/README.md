@@ -28,10 +28,17 @@ asset bundling 은 로컬 `uv` 또는 Docker 를 사용. CDK bootstrap 은 스�
 cd infra
 npm ci
 npm run build
-npx cdk bootstrap aws://<account-id>/ap-northeast-2
+npx cdk bootstrap aws://<account-id>/ap-northeast-2 -c stage=dev
 ```
 
-합성에 필요한 환경변수 목록은 저장소 루트 [QUICKSTART.md](../QUICKSTART.md) 3절 참조. 좌표
+`cdk bootstrap` 도 앱을 합성하므로 환경변수와 `-c stage` 가 필요. 기본 stage 인 `prod` 는
+`webBaseUrl` 을 요구해 부트스트랩이 먼저 실패.
+
+계정·리전 수준 선행조건(X-Ray trace destination, VPC 쿼터, 사람 사용자 2명)은 저장소 루트
+[QUICKSTART.md](../QUICKSTART.md) "계정 선행조건" 절 참조. CDK 가 만들어 주지 않고, 빠지면
+`AgoraM2OAuthGateway`·`AgoraMonitoringAggregate`·`AgoraPortal` 이 CREATE_FAILED.
+
+합성에 필요한 환경변수 목록은 QUICKSTART 3절, CDK output → 환경변수 매핑은 5절 참조. 좌표
 누락 시 앱이 합성 자체를 거부.
 
 ## Cognito 도메인 접두어
@@ -83,17 +90,33 @@ Identity 스택의 `agora-perms-claim-<stage>` 는 Cognito access token 발급 �
 
 ## 첫 배포 순서
 
-`cdk deploy --all` 은 `AgoraCatalogStorage` 가 제공하는 공유 실행 롤을 포함해 스택 의존 순서를
-자동 해석. 단 Registry ID 때문에 한 바퀴 필요.
+`cdk deploy --all` 은 스택 의존 순서를 자동 해석. 단 합성이 요구하는 값 중 셋이 배포 후에만
+생겨서 한 바퀴 필요 — Cognito 좌표 둘과 Registry ID.
+
+`AgoraCatalogStorage` 가 `AgoraM2OAuthGateway` 의 policy engine·봇 pool ARN 을 import 하므로
+Gateway 가 먼저. 그런데 Gateway authorizer 의 `discoveryUrl` 은 실재하는 pool 이어야 생성이
+통과하고, 그 pool(사람 pool)은 `AgoraIdentity` 에 있고 Identity 는 CatalogStorage 뒤. 그래서 첫
+배포에는 임시 pool 하나가 필요.
+
+Registry 는 백엔드가 미지정일 때만 조회/생성하는데(`shared/deps.py`), 미지정이면 합성이
+실패하므로 SDK 로 먼저 만들어야 함.
+
+전체 절차와 명령은 [QUICKSTART.md](../QUICKSTART.md) "신규 계정 첫 배포 — 2-pass 부트스트랩".
 
 ```bash
-# 1) Registry ID 없이 1회 배포 (형식만 맞는 더미 값)
-AGORA_REGISTRY_ID=dummy npx cdk deploy --all -c stage=dev
+# pass 1 — 임시 pool + 미리 만든 registry ID 로 전체 배포
+npx cdk deploy --all -c stage=dev
 
-# 2) 백엔드 1회 실행으로 us-east-1 에 registry 생성.
-#    실제 registry ID 확인 후 인가 스택만 재배포.
-AGORA_REGISTRY_ID=<real-registry-id> \
-  npx cdk deploy AgoraRuntimeAuthorization-dev -c stage=dev
+# pass 2 — 실제 Identity output 으로 좌표 교체하고 포털까지
+npx cdk deploy --all -c stage=dev -c portal=true
+```
+
+`AGORA_DEPLOY_COGNITO_*` 를 처음 공급하는 배포는 consumer 를 먼저.
+`AgoraRuntimeAuthorization` 이 그 값 없이 `AgoraRuntimeDeploy` export 를 import 하고 있어서,
+producer 를 먼저 배포하면 `Cannot delete export … as it is in use by` 로 롤백.
+
+```bash
+npx cdk deploy AgoraRuntimeAuthorization-dev --exclusively -c stage=dev
 ```
 
 RuntimeAuthorization 배포는 cross-stack dependency 때문에 Identity 도 함께 갱신 가능. 로컬 웹을

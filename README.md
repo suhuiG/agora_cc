@@ -92,9 +92,21 @@ Cognito 도메인 접두어는 전역 유일. 그래서 접두어를 `<base>-<st
 AWS 좌표(계정, 풀 ID, Gateway ID, 테이블명)는 소스에 없음. 전부 환경변수 또는 CDK 컨텍스트로
 주입하고, 누락 시 부팅·합성 실패. `api/.env.example` 과 `web/.env.example` 이 그 계약의 템플릿.
 
+## 계정 선행조건
+
+CDK 가 만들어 주지 않는 계정·리전 수준 설정 넷. 빠지면 스택이 CREATE_FAILED 로 죽거나 포털
+기능이 조용히 막힘. 명령은 [QUICKSTART.md](QUICKSTART.md#계정-선행조건).
+
+| 항목 | 없을 때 |
+| --- | --- |
+| X-Ray trace segment destination = CloudWatch Logs | `AgoraM2OAuthGateway` 와 `AgoraMonitoringAggregate` 생성 실패 |
+| VPCs per Region 쿼터 8 이상 | `AgoraPortal` 의 VPC 생성 실패 |
+| Cognito 사람 사용자 2명 이상 | 퍼블리시 폼의 2차 담당자를 채울 수 없어 등록 불가 |
+| semgrep 스캐너 이미지 ECR push | SAST 단계가 컨테이너 pull 실패로 종료 |
+
 ## 시작하기
 
-[QUICKSTART.md](QUICKSTART.md): 로컬 실행, 검증 명령, `cdk synth` 절차.
+[QUICKSTART.md](QUICKSTART.md): 검증 명령, `cdk synth`, 로컬 실행, 계정 배포 절차.
 
 ## 사용 범위
 
