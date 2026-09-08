@@ -30,13 +30,22 @@ SCOPE = "https://agora-m2-oauth-dev/invoke"
 
 
 class FakeControl:
-    """`SharedPolicyProvisioner` 가 부르는 control-plane 호출만 흉내내요."""
+    """`SharedPolicyProvisioner` 가 부르는 control-plane 호출만 흉내내요.
 
-    def __init__(self, policies=()):
+    `interceptor` 로 부착 관측 결과를 고를 수 있어요 — `True` 부착, `False` 미부착,
+    `None` 관측 실패(`get_gateway` 가 던짐).
+    """
+
+    def __init__(self, policies=(), *, interceptor: bool | None = True):
         self.policies = list(policies)
+        self.interceptor = interceptor
         self.created: list[dict] = []
 
     def get_gateway(self, **_kw):
+        if self.interceptor is None:
+            raise RuntimeError("throttled")
+        if self.interceptor is False:
+            return {"interceptorConfigurations": []}
         return {
             "interceptorConfigurations": [{"interceptionPoints": ["REQUEST"]}],
         }
@@ -132,11 +141,33 @@ def test_ledger_read_failure_is_unknown_not_empty():
     assert control.created == []
 
 
-@pytest.mark.parametrize("policies", [[], [{"name": "Gateway_other_r1", "policyId": "x"}]])
-def test_other_gateway_policies_do_not_count_as_ours(policies):
-    """다른 Gateway 의 정책은 우리 리비전이 아니에요 — no-op 판정을 막지 않아요."""
-    control = FakeControl(policies=policies)
+def test_noop_requires_a_completely_empty_engine():
+    """`Gateway_` 밖의 계열이 남아 있으면 no-op 으로 접지 않아요.
+
+    `_owned_policies` 는 `Gateway_{hash}_` 만 세요. `DomainRule_*` 같은 다른 계열의 잔존
+    permit 을 「없음」으로 읽으면, 폐기된 permit 이 실제 인가를 계속 허용하는데도 no-op 이
+    성공을 보고해요.
+    """
+    control = FakeControl(policies=[{"name": "DomainRule_stale", "policyId": "p-orphan"}])
     report = _provision(control, FakeStore())
 
-    assert report.verdict == "unchanged"
+    assert report.verdict != "unchanged"
+    assert control.created == []
+
+
+@pytest.mark.parametrize(
+    ("interceptor", "label"),
+    [(False, "미부착이 관측됨"), (None, "부착 여부를 관측하지 못함")],
+)
+def test_noop_requires_interceptor_attached(interceptor, label):
+    """interceptor 부착은 컴파일러가 무조건 요구하는 선행 조건이에요.
+
+    도구 단위 ④·⑦ 판정은 REQUEST interceptor 가 해요. 강제 지점이 떨어진 Gateway 를
+    「바꿀 것 없음」으로 보고하면 그 배포가 성공으로 넘어가요. 관측 실패도 통과로 접지 않아요.
+    """
+    control = FakeControl(policies=[], interceptor=interceptor)
+    report = _provision(control, FakeStore())
+
+    assert report.verdict != "unchanged", label
+    assert report.ok is False
     assert control.created == []

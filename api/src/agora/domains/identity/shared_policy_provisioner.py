@@ -513,19 +513,29 @@ class SharedPolicyProvisioner:
             report.reason = ledger_reason
             return report
 
-        # 신규 계정 첫 배포 — 원장이 **관측에 성공했고** 비어 있는데 엔진에도 우리 정책이
-        # 0장이면, 컴파일러의 "빈 집합으로 교체하지 않아요" 가드는 지킬 대상이 없어요.
-        # 그 가드의 목적은 관측 실패가 살아 있는 리비전을 지우는 것을 막는 거예요
-        # (`agent_policy_compiler` 참조). 관측 실패는 위 `ledger_reason` 에서 이미
-        # `verdict="unknown"` 으로 갈라졌으니, 여기 도달한 빈 원장은 "정말로 아직 없음" 이에요.
+        # 아무것도 없는 엔진 — 만들 것도 지울 것도 없어요.
         #
-        # 이 상태를 거부로 다루면 첫 MCP 배포가 `registering_target` 에서 죽어요 — 도구 인가
-        # 승인은 배포 **후**에 하는 절차라서 아무도 첫 배포를 통과할 수 없어요(순환).
-        if not bindings and not rules:
+        # 컴파일러의 "빈 집합으로 교체하지 않아요" 가드는 관측 실패가 **살아 있는** 리비전을
+        # 지우는 것을 막으려고 있어요(`agent_policy_compiler`). 지킬 리비전이 애초에 없으면
+        # 그 사고가 성립하지 않아요. 이 상태를 거부로 다루면 첫 MCP 배포가
+        # `registering_target` 에서 죽어요 — 도구 인가 승인은 배포 **후**에 하는 절차라서
+        # 아무도 첫 배포를 통과할 수 없어요(순환).
+        #
+        # 세 조건을 **모두** 만족할 때만 지나가요. 하나라도 빠지면 아래 정상 경로가 원래
+        # 가드로 판정해요.
+        #
+        # 1. `attached is True` — interceptor 부착은 컴파일러가 **무조건** 요구하는 선행
+        #    조건이에요(`agent_policy_compiler` 의 `request_interceptor_attached is not True`
+        #    분기). 여기서 그 검사를 건너뛰면 강제 지점이 떨어진 Gateway 를 «성공» 으로
+        #    보고해요 — 부착 여부를 관측하지 못한 `None` 도 통과로 접지 않아요.
+        # 2. 원장이 **관측에 성공했고** 0건 — 관측 실패는 위 `ledger_reason` 에서 이미
+        #    `verdict="unknown"` 으로 갈라졌어요.
+        # 3. 엔진에 정책이 **계열 무관 0장** — `_owned_policies` 는 `Gateway_{hash}_` 만 세서
+        #    `DomainRule_*` 같은 다른 계열의 잔존 permit 을 못 봐요. 그 상태를 「없음」으로
+        #    읽으면 폐기된 permit 이 살아 있는데도 no-op 이 성공을 보고해요.
+        if attached is True and not bindings and not rules:
             try:
-                preexisting = self._owned_policies(
-                    engine_id, spec_without_interceptor.gateway_arn
-                )
+                engine_policies = self._list_policies(engine_id)
             except Exception as exc:
                 report.ok = False
                 report.verdict = "unknown"
@@ -534,11 +544,11 @@ class SharedPolicyProvisioner:
                     f"{type(exc).__name__}: {exc}"
                 )
                 return report
-            if not preexisting:
+            if not engine_policies:
                 report.verdict = "unchanged"
                 report.reason = (
-                    "선언된 ④ binding·② rule 이 0건이고 엔진에 우리 정책도 0장이라 "
-                    "만들 것이 없어요. 관측은 성공했고 지울 리비전도 없어요."
+                    "선언된 ④ binding·② rule 이 0건이고 policy engine 이 비어 있어요. "
+                    "interceptor 부착은 확인했고, 만들 것도 지울 리비전도 없어요."
                 )
                 return report
 

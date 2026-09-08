@@ -335,8 +335,9 @@ export class RuntimeDeployStack extends cdk.Stack {
     new cdk.CfnOutput(this, "ExecRoleArn", {
       value: execRole.roleArn,
       description:
-        "AgentCore Runtime execution role (legacy output name). "
-        + "Maps to AGORA_DEPLOY_AGENT_EXEC_ROLE_ARN, NOT AGORA_DEPLOY_EXEC_ROLE_ARN.",
+        "McpRuntimeExecRole (legacy output name). No environment variable maps to it: "
+        + "AGORA_DEPLOY_EXEC_ROLE_ARN is the Lambda role (LambdaExecRoleArn) and "
+        + "AGORA_DEPLOY_AGENT_EXEC_ROLE_ARN is the agent role (AgentRuntimeExecRoleArn).",
     });
     new cdk.CfnOutput(this, "McpRuntimeExecRoleArn", {
       value: execRole.roleArn,

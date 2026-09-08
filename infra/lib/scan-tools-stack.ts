@@ -111,14 +111,22 @@ export class GovernanceScanToolsStack extends cdk.Stack {
               },
             },
           }));
+          // 리전 조건을 뺀 자리를 `bedrock:InferenceProfileArn` 으로 메워요. 이게 없으면
+          // foundation model 을 **profile 을 거치지 않고** 아무 리전에서나 직접 부를 수 있어서,
+          // 리전 조건을 뺀 것이 곧 「전 리전·전 모델 허용」이 돼요. 조건을 걸면 도달 경로가
+          // 이 계정의 inference profile 로만 남아요 — global 라우팅은 그대로 통과해요.
           fn.addToRolePolicy(new iam.PolicyStatement({
-            sid: "InvokeRoutedFoundationModel",
+            sid: "InvokeRoutedFoundationModelViaProfileOnly",
             actions: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
             resources: [
               `arn:${this.partition}:bedrock:*::foundation-model/*`,
             ],
             conditions: {
               StringEquals: { "aws:PrincipalAccount": this.account },
+              ArnLike: {
+                "bedrock:InferenceProfileArn":
+                  `arn:${this.partition}:bedrock:*:${this.account}:inference-profile/*`,
+              },
             },
           }));
         }

@@ -142,10 +142,12 @@ export AGORA_M2_OAUTH_DISCOVERY_URL=https://cognito-idp.ap-northeast-2.amazonaws
 # Runtime 인가 Lambda 가 조회할 Registry 좌표
 export AGORA_REGISTRY_ID=<registry id>
 
-# workload M2M 좌표. AgoraRuntimeDeploy 의 Cognito* output 세트에서 가져옴.
+# workload M2M 좌표 — AgoraRuntimeDeploy 의 Cognito* output **네 개가 한 묶음**.
 # 미설정이면 그 스택 출력을 cross-stack ref 로 가져오므로 합성만 볼 때는 생략 가능.
+# 배포에서 token URL 을 빼면 포털에 주입되지 않아 AgentCore invoker 가 비활성화돼요.
 export AGORA_DEPLOY_COGNITO_DISCOVERY_URL=<AgoraRuntimeDeploy CognitoDiscoveryUrl>
 export AGORA_DEPLOY_COGNITO_CLIENT_ID=<AgoraRuntimeDeploy CognitoClientId>
+export AGORA_DEPLOY_COGNITO_TOKEN_URL=<AgoraRuntimeDeploy CognitoTokenUrl>
 export AGORA_DEPLOY_COGNITO_SCOPE=https://agora-mcp-<stage>/invoke
 
 npx cdk list -c stage=dev
@@ -220,7 +222,8 @@ POOL=$(aws cognito-idp create-user-pool --region ap-northeast-2 \
   --pool-name agora-bootstrap-placeholder --query UserPool.Id --output text)
 
 # Registry 는 SDK 로 미리 생성. 이름은 백엔드가 찾는 `agora-registry` 로 고정.
-python - <<'PY'
+# boto3 는 `api/` 가상환경에만 있음 — `uv run` 으로 그 환경에서 실행.
+REGISTRY_ID=$(cd api && uv run python - <<'PY'
 import boto3
 r="us-east-1"; s="agent-registry-control"
 c=boto3.client(s, region_name=r, endpoint_url=f"https://{s}.{r}.api.aws")
@@ -230,19 +233,49 @@ arn=hit[0]["registryArn"] if hit else c.create_registry(
     name=name, description=name, approvalConfiguration={"autoApprovalRules": []})["registryArn"]
 print(arn.rsplit("/",1)[-1])
 PY
+)
 
+cd infra
+export AGORA_REGISTRY_ID=$REGISTRY_ID
 export AGORA_GATEWAY_HUMAN_CLIENT_IDS=bootstrapplaceholderclient
 export AGORA_M2_OAUTH_COGNITO_USER_POOL_ID=$POOL
 export AGORA_M2_OAUTH_DISCOVERY_URL=https://cognito-idp.ap-northeast-2.amazonaws.com/$POOL/.well-known/openid-configuration
-export AGORA_REGISTRY_ID=<위 스크립트가 출력한 registryId>
 
 npx cdk deploy --all -c stage=dev
 ```
 
-**pass 2** — 실제 output 으로 값을 교체하고 포털까지 배포. 그 뒤 임시 pool 삭제.
+**pass 2** — 임시값을 실제 output 으로 **교체한 뒤** 포털까지 배포.
+
+⚠️ pass 1 의 placeholder 환경변수가 셸에 그대로 남아 있음. 교체하지 않고 pass 2 를 돌리면
+Gateway 가 곧 삭제할 임시 pool 을 계속 issuer 로 참조해 모든 JWT 호출이 실패. 임시 pool 삭제는
+**교체·배포·확인이 끝난 뒤**.
 
 ```bash
+out() { aws cloudformation describe-stacks --region ap-northeast-2 \
+  --stack-name "$1-dev" --query "Stacks[0].Outputs[?OutputKey=='$2'].OutputValue" --output text; }
+
+# 사람 pool — 포털 로그인과 interceptor 의 사람 client 판별.
+export AGORA_GATEWAY_HUMAN_CLIENT_IDS=$(out AgoraIdentity HumanCognitoClientId)
+
+# Gateway 인바운드 발급자 = agent 별 M2M client 를 발급하는 봇 pool. 사람 pool 이 아님
+# (apiExecutionRole 의 CreateUserPoolClient 가 이 pool 에만 있음).
+export AGORA_M2_OAUTH_COGNITO_USER_POOL_ID=$(out AgoraM2OAuthGateway M2OAuthCognitoUserPoolId)
+export AGORA_M2_OAUTH_DISCOVERY_URL=$(out AgoraM2OAuthGateway M2OAuthDiscoveryUrl)
+
+# workload M2M 네 좌표는 한 묶음. token URL 이 빠지면 AgentCore invoker 가 비활성화돼
+# Playground 호출이 503.
+export AGORA_DEPLOY_COGNITO_DISCOVERY_URL=$(out AgoraRuntimeDeploy CognitoDiscoveryUrl)
+export AGORA_DEPLOY_COGNITO_CLIENT_ID=$(out AgoraRuntimeDeploy CognitoClientId)
+export AGORA_DEPLOY_COGNITO_TOKEN_URL=$(out AgoraRuntimeDeploy CognitoTokenUrl)
+export AGORA_DEPLOY_COGNITO_SCOPE=https://agora-mcp-dev/invoke
+
 npx cdk deploy --all -c stage=dev -c portal=true
+```
+
+배포 후 Gateway 가 임시 pool 을 더 참조하지 않는지 확인한 다음 삭제.
+
+```bash
+out AgoraM2OAuthGateway M2OAuthDiscoveryUrl   # $POOL 이 안 나와야 함
 aws cognito-idp delete-user-pool --region ap-northeast-2 --user-pool-id $POOL
 ```
 
@@ -260,11 +293,19 @@ aws cognito-idp delete-user-pool --region ap-northeast-2 --user-pool-id $POOL
 | `ExecRoleArn` = `McpRuntimeExecRoleArn` | (전용 env 없음) | AgentCore Runtime (MCP) |
 | `AgentRuntimeExecRoleArn` | `AGORA_DEPLOY_AGENT_EXEC_ROLE_ARN` | AgentCore Runtime (agent) |
 | `HumanCognitoClientId` | `AGORA_AUTH_COGNITO_CLIENT_ID`·`AGORA_GATEWAY_HUMAN_CLIENT_IDS` | 사람 web client |
-| `M2OAuthCognitoUserPoolId` | `AGORA_M2_OAUTH_COGNITO_USER_POOL_ID` | agent 별 M2M client 발급 pool |
+| `HumanUserPoolId` | `AGORA_AUTH_COGNITO_USER_POOL_ID` | 사람 pool (포털 로그인) |
+| `M2OAuthCognitoUserPoolId` | `AGORA_M2_OAUTH_COGNITO_USER_POOL_ID` | 봇 pool. agent 별 M2M client 발급처 |
+| `M2OAuthDiscoveryUrl` | `AGORA_M2_OAUTH_DISCOVERY_URL` | Gateway 인바운드 발급자. 위와 **같은 pool** |
+| `CognitoDiscoveryUrl`·`CognitoClientId`·`CognitoTokenUrl` (RuntimeDeploy) | `AGORA_DEPLOY_COGNITO_*` | workload M2M. 네 개가 한 묶음 |
 | `StateMachineArn` (ScanTools) | `AGORA_SFN_ARN` | 스캔 오케스트레이션 |
 
 `AGORA_DEPLOY_EXEC_ROLE_ARN` 에 `ExecRoleArn` 을 넣으면 MCP(배포형) 등록이
 `iam:PassRole … McpRuntimeExecRole … no identity-based policy allows` 로 실패.
+
+`AGORA_M2_OAUTH_COGNITO_USER_POOL_ID` 는 **사람 pool 이 아니에요.** agent 별 M2M app client 를
+발급하는 pool 이고, `apiExecutionRole` 의 `cognito-idp:CreateUserPoolClient` 가 그 봇 pool 에만
+부여돼 있어요. 사람 pool 을 넣으면 agent 배포가 AccessDenied 로 죽어요. 사람 pool 로의 이전은
+`infra/bin/agora.ts` 주석의 IA-78 소관이고 아직 안 됐어요.
 
 ### `AGORA_DEPLOY_COGNITO_*` 를 처음 넣는 배포
 
@@ -314,3 +355,10 @@ output 에서 전달.
 Registry 네임스페이스(`AGORA_REGISTRY_NAMESPACE`)는 `agent-registry` 가 기본. CDK 가 부여하는
 registry IAM grant 도 이 네임스페이스 기준이고, endpoint 는 `.api.aws` 도메인. 구
 `bedrock-agentcore` 네임스페이스는 되돌리기 좌표로만 남겨 둔 값이라 새 계정에서 쓰지 않음.
+
+⚠️ **두 네임스페이스 사이에 데이터는 자동으로 넘어가지 않음.** 구 네임스페이스로 이미 카탈로그를
+쌓은 설치가 있으면, 네임스페이스만 바꾸면 구 registry ID 가 신 API 에서 유효하지 않아 조회가
+실패하거나(`AGORA_REGISTRY_ID` 지정 시), 지정하지 않았을 때는 빈 registry 를 새로 만들어
+**카탈로그가 비어 보임**. 그 경우 이전 계획을 세운 뒤에 바꾸고, 그때까지는
+`AGORA_REGISTRY_NAMESPACE=bedrock-agentcore` 로 고정. 구 네임스페이스 자체는 종료 예정이라
+그 고정은 임시 조치.

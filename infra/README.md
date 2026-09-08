@@ -107,9 +107,13 @@ Registry 는 백엔드가 미지정일 때만 조회/생성하는데(`shared/dep
 # pass 1 — 임시 pool + 미리 만든 registry ID 로 전체 배포
 npx cdk deploy --all -c stage=dev
 
-# pass 2 — 실제 Identity output 으로 좌표 교체하고 포털까지
+# pass 2 — 셸의 placeholder 환경변수를 실제 output 으로 **교체한 뒤** 포털까지
+#          (교체 명령과 임시 pool 삭제 시점은 QUICKSTART 5절)
 npx cdk deploy --all -c stage=dev -c portal=true
 ```
+
+pass 1 의 placeholder 값이 셸에 남은 채로 pass 2 를 돌리면 Gateway 가 임시 pool 을 issuer 로
+계속 참조. 임시 pool 을 지우는 순간 모든 JWT 호출이 실패.
 
 `AGORA_DEPLOY_COGNITO_*` 를 처음 공급하는 배포는 consumer 를 먼저.
 `AgoraRuntimeAuthorization` 이 그 값 없이 `AgoraRuntimeDeploy` export 를 import 하고 있어서,
