@@ -513,6 +513,35 @@ class SharedPolicyProvisioner:
             report.reason = ledger_reason
             return report
 
+        # 신규 계정 첫 배포 — 원장이 **관측에 성공했고** 비어 있는데 엔진에도 우리 정책이
+        # 0장이면, 컴파일러의 "빈 집합으로 교체하지 않아요" 가드는 지킬 대상이 없어요.
+        # 그 가드의 목적은 관측 실패가 살아 있는 리비전을 지우는 것을 막는 거예요
+        # (`agent_policy_compiler` 참조). 관측 실패는 위 `ledger_reason` 에서 이미
+        # `verdict="unknown"` 으로 갈라졌으니, 여기 도달한 빈 원장은 "정말로 아직 없음" 이에요.
+        #
+        # 이 상태를 거부로 다루면 첫 MCP 배포가 `registering_target` 에서 죽어요 — 도구 인가
+        # 승인은 배포 **후**에 하는 절차라서 아무도 첫 배포를 통과할 수 없어요(순환).
+        if not bindings and not rules:
+            try:
+                preexisting = self._owned_policies(
+                    engine_id, spec_without_interceptor.gateway_arn
+                )
+            except Exception as exc:
+                report.ok = False
+                report.verdict = "unknown"
+                report.reason = (
+                    "기존 정책 목록을 읽지 못해 아무것도 바꾸지 않았어요: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                return report
+            if not preexisting:
+                report.verdict = "unchanged"
+                report.reason = (
+                    "선언된 ④ binding·② rule 이 0건이고 엔진에 우리 정책도 0장이라 "
+                    "만들 것이 없어요. 관측은 성공했고 지울 리비전도 없어요."
+                )
+                return report
+
         inventory, inventory_reason = self.observe_live_gateway_inventory(
             gateway_id, needed_targets=_declared_target_names(bindings)
         )
